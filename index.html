@@ -1,0 +1,319 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NEWSWAVE | Canadian Election Map</title>
+
+  <link href="https://unpkg.com/maplibre-gl@6.18.0/dist/maplibre-gl.css" rel="stylesheet">
+
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: #071426;
+      color: white;
+      font-family: Arial, sans-serif;
+    }
+
+    header {
+      padding: 22px 28px;
+      background: #0b1d35;
+      border-bottom: 2px solid #2463a6;
+    }
+
+    .brand {
+      font-size: 28px;
+      font-weight: 900;
+      letter-spacing: 2px;
+    }
+
+    .tagline {
+      color: #b8c8da;
+      margin-top: 5px;
+      font-size: 13px;
+    }
+
+    main {
+      max-width: 1500px;
+      margin: auto;
+      padding: 22px;
+    }
+
+    h1 {
+      font-size: 25px;
+      margin: 0 0 6px;
+    }
+
+    .subtitle {
+      color: #aebed0;
+      margin-bottom: 20px;
+      font-size: 14px;
+    }
+
+    #status {
+      background: #142b47;
+      padding: 12px 15px;
+      border-radius: 6px;
+      margin-bottom: 15px;
+      color: #d7e7f8;
+      font-size: 13px;
+    }
+
+    #map {
+      width: 100%;
+      height: 680px;
+      border: 1px solid #314963;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 15px;
+      margin-top: 17px;
+      color: #d7e1ed;
+      font-size: 13px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .swatch {
+      width: 13px;
+      height: 13px;
+      border-radius: 2px;
+    }
+
+    footer {
+      padding: 20px;
+      text-align: center;
+      color: #8fa5bc;
+      font-size: 12px;
+    }
+
+    @media (max-width: 650px) {
+      main { padding: 12px; }
+      #map { height: 580px; }
+      header { padding: 18px; }
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <div class="brand">NEWSWAVE</div>
+    <div class="tagline">Reporting that matters.</div>
+  </header>
+
+  <main>
+    <h1>2025 Canadian Federal Election</h1>
+    <div class="subtitle">
+      Riding-by-riding results across Canada · Historical results
+    </div>
+
+    <div id="status">Loading election data...</div>
+    <div id="map"></div>
+
+    <div class="legend">
+      <div class="legend-item"><span class="swatch" style="background:#D71920"></span>Liberal</div>
+      <div class="legend-item"><span class="swatch" style="background:#0055A4"></span>Conservative</div>
+      <div class="legend-item"><span class="swatch" style="background:#F58220"></span>NDP</div>
+      <div class="legend-item"><span class="swatch" style="background:#00AEEF"></span>Bloc Québécois</div>
+      <div class="legend-item"><span class="swatch" style="background:#3D9B35"></span>Green</div>
+      <div class="legend-item"><span class="swatch" style="background:#6A3D9A"></span>People's Party</div>
+      <div class="legend-item"><span class="swatch" style="background:#777777"></span>Other / unmatched</div>
+    </div>
+  </main>
+
+  <footer>
+    NEWSWAVE · Reporting that matters. · Historical 2025 election data
+  </footer>
+
+  <script src="https://unpkg.com/maplibre-gl@6.18.0/dist/maplibre-gl.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <script>
+    const statusBox = document.getElementById("status");
+
+    const partyColors = {
+      "Liberal": "#D71920",
+      "Conservative": "#0055A4",
+      "NDP": "#F58220",
+      "Bloc Québécois": "#00AEEF",
+      "Bloc Quebecois": "#00AEEF",
+      "Green": "#3D9B35",
+      "People's Party": "#6A3D9A",
+      "Independent": "#777777"
+    };
+
+    function normalize(value) {
+      return String(value ?? "").trim().replace(/^0+/, "");
+    }
+
+    function showError(message) {
+      statusBox.textContent = message;
+      statusBox.style.background = "#54252b";
+    }
+
+    async function startMap() {
+      try {
+        const [geoResponse, csvResponse] = await Promise.all([
+          fetch("./FED_CA_2025_EN.geojson"),
+          fetch("./newswave_2025_riding_winners.csv")
+        ]);
+
+        if (!geoResponse.ok) {
+          throw new Error("Could not load FED_CA_2025_EN.geojson. Check the filename.");
+        }
+
+        if (!csvResponse.ok) {
+          throw new Error("Could not load newswave_2025_riding_winners.csv. Check the filename.");
+        }
+
+        const geojson = await geoResponse.json();
+        const csvText = await csvResponse.text();
+
+        if (!geojson.features || !Array.isArray(geojson.features)) {
+          throw new Error("The boundary file is not a valid GeoJSON FeatureCollection.");
+        }
+
+        const parsed = Papa.parse(csvText, {
+          header: true,
+          skipEmptyLines: true,
+          dynamicTyping: false
+        });
+
+        if (parsed.errors.length) {
+          console.warn("CSV warnings:", parsed.errors);
+        }
+
+        const results = {};
+
+        parsed.data.forEach(row => {
+          const id = normalize(row.District_ID);
+          if (id) results[id] = row;
+        });
+
+        let matched = 0;
+
+        geojson.features.forEach(feature => {
+          const id = normalize(feature.properties.FED_NUM);
+          const result = results[id];
+
+          if (result) {
+            matched++;
+            feature.properties.Riding = result.Riding;
+            feature.properties.Candidate = result.Candidate;
+            feature.properties.Party = result.Party;
+            feature.properties.Votes = result.Votes;
+            feature.properties.Vote_Percent = result.Vote_Percent;
+            feature.properties.Majority = result.Majority;
+          } else {
+            feature.properties.Party = "Other / unmatched";
+          }
+        });
+
+        const map = new maplibregl.Map({
+          container: "map",
+          style: "https://tiles.openfreemap.org/styles/liberty",
+          center: [-96, 58],
+          zoom: 2.7,
+          minZoom: 2
+        });
+
+        map.addControl(new maplibregl.NavigationControl(), "top-right");
+
+        map.on("load", () => {
+          map.addSource("ridings", {
+            type: "geojson",
+            data: geojson
+          });
+
+          const matchExpression = ["match", ["get", "Party"]];
+
+          Object.entries(partyColors).forEach(([party, color]) => {
+            matchExpression.push(party, color);
+          });
+
+          matchExpression.push("#777777");
+
+          map.addLayer({
+            id: "ridings-fill",
+            type: "fill",
+            source: "ridings",
+            paint: {
+              "fill-color": matchExpression,
+              "fill-opacity": 0.78
+            }
+          });
+
+          map.addLayer({
+            id: "ridings-outline",
+            type: "line",
+            source: "ridings",
+            paint: {
+              "line-color": "#ffffff",
+              "line-width": 0.45,
+              "line-opacity": 0.65
+            }
+          });
+
+          map.on("click", "ridings-fill", event => {
+            const properties = event.features[0].properties;
+
+            const name = properties.Riding || properties.ED_NAMEE || "Unknown riding";
+            const party = properties.Party || "No result matched";
+            const candidate = properties.Candidate || "Not available";
+            const votes = properties.Votes
+              ? Number(properties.Votes).toLocaleString("en-CA")
+              : "Not available";
+            const percent = properties.Vote_Percent || "Not available";
+
+            new maplibregl.Popup()
+              .setLngLat(event.lngLat)
+              .setHTML(`
+                <div style="font-family:Arial;min-width:190px;color:#172033">
+                  <strong style="font-size:16px">${name}</strong>
+                  <hr>
+                  <b>Winner:</b> ${candidate}<br>
+                  <b>Party:</b> ${party}<br>
+                  <b>Votes:</b> ${votes}<br>
+                  <b>Vote share:</b> ${percent}
+                </div>
+              `)
+              .addTo(map);
+          });
+
+          map.on("mouseenter", "ridings-fill", () => {
+            map.getCanvas().style.cursor = "pointer";
+          });
+
+          map.on("mouseleave", "ridings-fill", () => {
+            map.getCanvas().style.cursor = "";
+          });
+
+          statusBox.textContent =
+            `Map loaded. ${matched} of ${geojson.features.length} boundary features matched to election results.`;
+        });
+
+        map.on("error", event => {
+          console.error("Map error:", event.error);
+        });
+
+      } catch (error) {
+        console.error(error);
+        showError("Problem loading the map: " + error.message);
+      }
+    }
+
+    startMap();
+  </script>
+</body>
+</html>
